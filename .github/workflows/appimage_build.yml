@@ -1,10 +1,10 @@
 name: Build AppImage
 
-# Trigger the workflow on push to the main branch
+# Trigger the workflow on push to the master branch
 on:
   push:
     branches:
-      - master # Adjust if your main branch is 'master'
+      - master # Make sure this is your main branch name
 
 # Define a single job named 'build'
 jobs:
@@ -67,26 +67,37 @@ jobs:
       # Create the AppDir structure and install
       - name: Create AppDir and install
         run: |
+          echo "--- Running make install ---"
           mkdir -p AppDir
           make install DESTDIR=$(pwd)/AppDir
+          echo "--- Finished make install ---"
+          echo "--- Listing AppDir/usr/bin ---"
+          ls -l AppDir/usr/bin || echo "AppDir/usr/bin not found or empty"
+          echo "--- Listing AppDir/usr/share/applications ---"
+          ls -l AppDir/usr/share/applications || echo "AppDir/usr/share/applications not found or empty"
+          echo "--- Listing AppDir/usr/share/icons ---"
+          find AppDir/usr/share/icons -ls 2>/dev/null || echo "AppDir/usr/share/icons not found or empty"
 
       # Setup AppDir metadata (Fix categories, ensure icon, use printf fallback)
       - name: Setup AppDir metadata
         run: |
           DESKTOP_FILE="AppDir/usr/share/applications/desktop-entry-editor.desktop"
-          ICON_SOURCE="data/icons/desktop-entry-editor.svg" # Adjust if your icon path is different
+          # !!! DOUBLE-CHECK THIS PATH !!! Is this *exactly* where your icon is in the repo?
+          ICON_SOURCE="data/icons/desktop-entry-editor.svg"
           ICON_DEST_DIR="AppDir/usr/share/icons/hicolor/scalable/apps"
           ICON_DEST_FILE="$ICON_DEST_DIR/desktop-entry-editor.svg"
+
+          echo "Attempting to use source icon path: $ICON_SOURCE"
+          echo "Checking if source icon exists..."
+          ls -l "$ICON_SOURCE" || echo "Source icon '$ICON_SOURCE' NOT FOUND at listed path!"
 
           # Check if the installed desktop file exists
           if [ -f "$DESKTOP_FILE" ]; then
             echo "Desktop file found at '$DESKTOP_FILE'. Checking categories..."
-            # Use sed to fix the category if it's the wrong one (Workaround)
-            # Consider fixing this in your source repo's .desktop file instead!
             sed -i 's/Categories=Accessories;/Categories=Utility;/g' "$DESKTOP_FILE"
             echo "Ensured 'Categories=Utility;' in existing file."
           else
-            # Fallback: Create a basic desktop file using printf (safer than here-doc)
+            # Fallback: Create a basic desktop file using printf
             echo "Desktop file not found at '$DESKTOP_FILE'! Creating a basic one..."
             mkdir -p "$(dirname "$DESKTOP_FILE")"
             printf "%s\n" \
@@ -96,46 +107,54 @@ jobs:
               "Exec=desktop-entry-editor" \
               "Icon=desktop-entry-editor" \
               "Categories=Utility;" \
-              > "$DESKTOP_FILE" # Use valid Utility category
+              > "$DESKTOP_FILE"
             echo "Created basic $DESKTOP_FILE"
           fi
 
           # Ensure icon exists, copy if needed
+          echo "Checking if destination icon '$ICON_DEST_FILE' exists..."
           if [ ! -f "$ICON_DEST_FILE" ]; then
+             # Only try to copy if source exists
              if [ -f "$ICON_SOURCE" ]; then
-               echo "Icon not found in AppDir, copying from '$ICON_SOURCE'..."
+               echo "Destination icon not found. Copying from '$ICON_SOURCE'..."
                mkdir -p "$ICON_DEST_DIR"
                cp "$ICON_SOURCE" "$ICON_DEST_FILE"
                echo "Copied '$ICON_SOURCE' to '$ICON_DEST_FILE'"
+               ls -l "$ICON_DEST_FILE" # Verify copy
              else
-               echo "Warning: Source icon not found at '$ICON_SOURCE'. AppImage icon might be missing."
+               # Source doesn't exist - This is the likely cause of the linuxdeploy error
+               echo "ERROR: Source icon '$ICON_SOURCE' not found. Cannot copy icon."
+               echo "ERROR: linuxdeploy will likely fail because the icon specified in the .desktop file cannot be found."
              fi
           else
-             echo "Icon already exists: $ICON_DEST_FILE"
+             echo "Destination icon '$ICON_DEST_FILE' already exists."
           fi
 
           # Debugging: Print final desktop file content
           echo "--- Final contents of $DESKTOP_FILE ---"
-          cat "$DESKTOP_FILE"
+          cat "$DESKTOP_FILE" || echo "Could not cat $DESKTOP_FILE"
           echo "--- End of $DESKTOP_FILE ---"
 
 
-            # Create the AppImage using linuxdeploy
+      # Create the AppImage using linuxdeploy (CORRECTED STEP)
       - name: Create AppImage
         run: |
           export DEPLOY_GTK_VERSION=3
           # Add LINUXDEPLOY_DEBUG=1 for much more verbose output if needed
           # export LINUXDEPLOY_DEBUG=1
           echo "Running linuxdeploy..."
+          # Ensure each line ending with \ has it as the VERY last character
+          # Ensure the last line does NOT end with \
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --plugin gtk \
             --output appimage \
-            # Directly provide the path string, replacing the non-existent variable
             --desktop-file "AppDir/usr/share/applications/desktop-entry-editor.desktop"
+
       # Upload the generated AppImage artifact
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
           name: desktop-entry-editor-AppImage
-          path: ./*-x86_64.AppImage # Match linuxdeploy output pattern
+          # Adjust if linuxdeploy names the file differently, e.g., based on AppDir/Name in .desktop
+          path: ./*-x86_64.AppImage
