@@ -1,9 +1,9 @@
 name: Build AppImage (Autotools)
 
 on:
-  workflow_dispatch:
-    branches:
-      - master # Make sure this is your main branch name
+  push:
+    branches: [ "main" ] # Adjust branch name if needed (e.g., "master")
+  workflow_dispatch: # Allow manual triggering
 
 jobs:
   build:
