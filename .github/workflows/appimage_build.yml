@@ -4,7 +4,7 @@ name: Build AppImage
 on:
   push:
     branches:
-      - main # Changed from 'master' - adjust if your main branch is different
+      - master # Changed from 'master' - adjust if your main branch is different
 
 # Define a single job named 'build'
 jobs:
