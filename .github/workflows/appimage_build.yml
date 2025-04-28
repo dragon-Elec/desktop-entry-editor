@@ -2,7 +2,7 @@ name: Build AppImage
 
 # Trigger the workflow on push to the master branch
 on:
-  push:
+  workflow_dispatch:
     branches:
       - master # Make sure this is your main branch name
 
