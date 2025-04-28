@@ -1,0 +1,163 @@
+name: Build AppImage (Autotools)
+
+on:
+  push:
+    branches: [ "main" ] # Adjust branch name if needed (e.g., "master")
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # Use a standard GitHub runner
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Install Build and Runtime Dependencies
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential automake autoconf libtool \
+            python3 python3-pip python3-gi gir1.2-gtk-3.0 libgtk-3-dev \
+            wget # For downloading linuxdeploy
+
+      # 2. Set up Python (Ensures consistent environment)
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x' # Use a recent Python 3. Can specify e.g. '3.10'
+
+      # 3. Generate ./configure script (Standard for Autotools from git)
+      - name: Run autoreconf (generate configure script)
+        run: autoreconf -fiv
+
+      # 4. Configure the build
+      - name: Configure Build
+        run: |
+          # Use /usr prefix which is standard for AppDir structures.
+          # Autotools should detect python3 automatically now.
+          ./configure --prefix=/usr
+
+      # 5. Build the application
+      - name: Make Build
+        run: make
+
+      # 6. Prepare AppDir and Install Application using 'make install'
+      - name: Prepare AppDir and Install
+        run: |
+          mkdir AppDir # Create the root for installation
+          # Install files into AppDir, respecting the /usr prefix from configure
+          # $PWD ensures DESTDIR is an absolute path
+          make install DESTDIR="$PWD/AppDir"
+          # Verify installation (optional but useful debug step)
+          echo "--- AppDir contents after make install ---"
+          ls -lR AppDir/usr
+          echo "-----------------------------------------"
+
+      # 7. Bundle Python Runtime into AppDir (CRUCIAL STEP)
+      - name: Bundle Python 3
+        run: |
+          echo "Locating Python 3 installation..."
+          PYTHON_EXE=$(which python3)
+          PYTHON_VER_MAJOR_MINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          # Find where Python standard libraries are installed
+          PYTHON_INSTALL_PREFIX=$(python3 -c "import sys; print(sys.prefix)") # e.g., /usr
+          PYTHON_LIB_DIR="${PYTHON_INSTALL_PREFIX}/lib/python${PYTHON_VER_MAJOR_MINOR}"
+          # Find where packages like 'gi' are installed
+          PYTHON_SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])") # e.g., /usr/lib/python3/dist-packages
+
+          echo "Python Executable: ${PYTHON_EXE}"
+          echo "Python Version: ${PYTHON_VER_MAJOR_MINOR}"
+          echo "Python Lib Dir: ${PYTHON_LIB_DIR}"
+          echo "Python Site Packages: ${PYTHON_SITE_PACKAGES}"
+
+          echo "Copying Python executable..."
+          # Ensure target directory exists within AppDir
+          mkdir -p AppDir/usr/bin
+          cp "$PYTHON_EXE" AppDir/usr/bin/
+
+          echo "Copying essential Python libraries..."
+          # Ensure target directory exists within AppDir (using the detected path structure)
+          mkdir -p "AppDir${PYTHON_LIB_DIR}"
+          # Copy core library files. -L follows symlinks. '*' copies contents.
+          cp -rL "${PYTHON_LIB_DIR}/"*.py "AppDir${PYTHON_LIB_DIR}/"
+          cp -rL "${PYTHON_LIB_DIR}/"*.so* "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true # Copy shared objects if any
+          # Copy key subdirectories needed by many apps (add more if needed)
+          cp -rL "${PYTHON_LIB_DIR}/encodings" "AppDir${PYTHON_LIB_DIR}/"
+          cp -rL "${PYTHON_LIB_DIR}/importlib" "AppDir${PYTHON_LIB_DIR}/"
+          cp -rL "${PYTHON_LIB_DIR}/collections" "AppDir${PYTHON_LIB_DIR}/"
+          cp -rL "${PYTHON_LIB_DIR}/lib-dynload" "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true # Compiled modules
+
+
+          echo "Copying Python site-packages (including gi)..."
+          # Ensure target directory exists within AppDir
+          mkdir -p "AppDir${PYTHON_SITE_PACKAGES}"
+          # Copy the 'gi' module, which is critical for GTK apps
+          if [ -d "${PYTHON_SITE_PACKAGES}/gi" ]; then
+            cp -rL "${PYTHON_SITE_PACKAGES}/gi" "AppDir${PYTHON_SITE_PACKAGES}/"
+          else
+            echo "Warning: Python 'gi' module not found at ${PYTHON_SITE_PACKAGES}/gi"
+          fi
+          # Optionally copy other specific needed packages if identified later
+
+          echo "Python bundling attempt complete."
+
+      # 8. Download linuxdeploy tools
+      - name: Download linuxdeploy tools
+        run: |
+          wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+
+      # 9. Create the AppImage
+      - name: Create AppImage
+        env:
+           # Make AppRun provide python3 when 'env python3' is used
+           PYTHONPATH: "${APPDIR}/usr/lib/python${PYTHON_VER_MAJOR_MINOR}:${APPDIR}${PYTHON_SITE_PACKAGES}"
+        run: |
+          export DEPLOY_GTK_VERSION=3
+          # export LINUXDEPLOY_DEBUG=1 # Uncomment for verbose debugging
+
+          # Define paths based on standard installation locations within AppDir
+          # Note: 'make install' should have created these from the .in files
+          DESKTOP_FILE="AppDir/usr/share/applications/desktop-entry-editor.desktop"
+          ICON_FILE_SVG="AppDir/usr/share/icons/hicolor/scalable/apps/desktop-entry-editor.svg"
+          ICON_FILE_PNG="AppDir/usr/share/icons/hicolor/48x48/apps/desktop-entry-editor.png" # Check size if needed
+          EXECUTABLE_FILE="AppDir/usr/bin/desktop-entry-editor" # The script installed by 'make install'
+
+          # Check files exist (important for debugging)
+          echo "Checking for files:"
+          ls -l "$DESKTOP_FILE"
+          ls -l "$EXECUTABLE_FILE"
+          ls -l "$ICON_FILE_SVG" 2>/dev/null || ls -l "$ICON_FILE_PNG" 2>/dev/null || echo "Icon file not found"
+
+
+          # Select the icon file argument that exists
+          ICON_ARG=""
+          if [ -f "$ICON_FILE_SVG" ]; then
+            ICON_ARG="--icon-file $ICON_FILE_SVG"
+            echo "Using SVG icon."
+          elif [ -f "$ICON_FILE_PNG" ]; then
+             ICON_ARG="--icon-file $ICON_FILE_PNG"
+             echo "Warning: SVG icon not found, using PNG icon."
+          else
+             echo "Warning: No icon file found for AppImage embedding."
+          fi
+
+          echo "Running linuxdeploy..."
+          # Run linuxdeploy. It will find libs, bundle GTK, create AppRun etc.
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin gtk \
+            --output appimage \
+            --desktop-file "$DESKTOP_FILE" \
+            $ICON_ARG \
+            --executable "$EXECUTABLE_FILE"
+
+      # 10. Upload the AppImage artifact
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Desktop-Entry-Editor-AppImage
+          path: Desktop_Entry_Editor*.AppImage # Use wildcard matching for generated name
