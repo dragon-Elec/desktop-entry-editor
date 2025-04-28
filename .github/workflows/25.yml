@@ -3,7 +3,7 @@ name: Build AppImage (Autotools)
 on:
   workflow_dispatch:
     branches:
-      - main # Make sure this is your main branch name
+      - master # Make sure this is your main branch name
 
 jobs:
   build:
