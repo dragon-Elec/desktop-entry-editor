@@ -1,4 +1,4 @@
-# Workflow name
+# Workflow Name
 name: Build AppImage
 
 # Trigger the workflow on push to the main branch
