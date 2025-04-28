@@ -5,7 +5,7 @@ name: Build AppImage
 on:
   push:
     branches:
-      - main # Or 'master' if that's your main branch name
+      - master # Or 'master' if that's your main branch name
 
 # Define a single job named 'build'
 jobs:
