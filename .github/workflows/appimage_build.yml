@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v2
 
       # Install build tools and GTK dependencies
       - name: Install dependencies
