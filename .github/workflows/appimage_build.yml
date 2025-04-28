@@ -4,7 +4,7 @@ name: Build AppImage
 on:
   push:
     branches:
-      - master # Changed from 'master' - adjust if your main branch is different
+      - main # Adjust if your main branch is 'master'
 
 # Define a single job named 'build'
 jobs:
@@ -22,9 +22,7 @@ jobs:
       # Install build dependencies via apt
       - name: Install build dependencies
         run: |
-          # Update package list
           sudo apt update
-          # Install essential build tools, libraries, and Python dependencies
           sudo apt install -y \
             build-essential \
             automake \
@@ -40,7 +38,7 @@ jobs:
             python3-gi \
             python3-gi-cairo \
             python3-xdg \
-            fuse   # Required for AppImage execution
+            fuse
 
       # Download linuxdeploy and its GTK plugin
       - name: Download linuxdeploy and plugins
@@ -48,55 +46,49 @@ jobs:
           wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
           chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
-          # Make AppImage executable in CI environment
-          # Note: This might not be strictly necessary for linuxdeploy itself, but good practice if running other AppImages
           sudo modprobe fuse || echo "fuse module already loaded or unavailable"
           mkdir -p $HOME/.cache/linuxdeploy
 
-      # Create the m4 directory if it doesn't exist (Autotools best practice)
+      # Create the m4 directory if it doesn't exist
       - name: Create m4 directory
         run: mkdir -p m4
 
-      # Prepare build system (run autoreconf) - good practice for Autotools in CI
+      # Prepare build system (run autoreconf)
       - name: Prepare build system
         run: |
-          # Ensure the environment finds the .m4 files installed by dev packages
           autoreconf --force --install --verbose
 
-      # Run the standard Autotools configuration and build steps
+      # Configure and Build
       - name: Configure and Build
         run: |
-          # Run autotools sequence - simplified since autoreconf already ran
-          # These might be redundant if autoreconf worked fully, but harmless
-          # intltoolize --force --copy --automake
-          # automake --add-missing --copy
-
-          # Configure the build, install to /usr within the AppDir
           ./configure --prefix=/usr
-
-          # Compile the application
           make
 
-      # Create the AppDir structure and install the built application into it
+      # Create the AppDir structure and install
       - name: Create AppDir and install
         run: |
           mkdir -p AppDir
-          # Install using the DESTDIR variable to place files in the AppDir
           make install DESTDIR=$(pwd)/AppDir
 
-      # Ensure desktop file and icon are correctly set up (CORRECTED SECTION)
+      # Setup AppDir metadata (Fix categories, ensure icon, use printf fallback)
       - name: Setup AppDir metadata
         run: |
           DESKTOP_FILE="AppDir/usr/share/applications/desktop-entry-editor.desktop"
-          ICON_SOURCE="data/icons/desktop-entry-editor.svg" # Assuming this path is correct relative to repo root
+          ICON_SOURCE="data/icons/desktop-entry-editor.svg" # Adjust if your icon path is different
           ICON_DEST_DIR="AppDir/usr/share/icons/hicolor/scalable/apps"
           ICON_DEST_FILE="$ICON_DEST_DIR/desktop-entry-editor.svg"
 
-          # Create the desktop file if it doesn't exist
-          if [ ! -f "$DESKTOP_FILE" ]; then
+          # Check if the installed desktop file exists
+          if [ -f "$DESKTOP_FILE" ]; then
+            echo "Desktop file found at '$DESKTOP_FILE'. Checking categories..."
+            # Use sed to fix the category if it's the wrong one (Workaround)
+            # Consider fixing this in your source repo's .desktop file instead!
+            sed -i 's/Categories=Accessories;/Categories=Utility;/g' "$DESKTOP_FILE"
+            echo "Ensured 'Categories=Utility;' in existing file."
+          else
+            # Fallback: Create a basic desktop file using printf (safer than here-doc)
             echo "Desktop file not found at '$DESKTOP_FILE'! Creating a basic one..."
             mkdir -p "$(dirname "$DESKTOP_FILE")"
-            # Use printf to create the file content safely, avoiding here-doc issues
             printf "%s\n" \
               "[Desktop Entry]" \
               "Type=Application" \
@@ -104,13 +96,11 @@ jobs:
               "Exec=desktop-entry-editor" \
               "Icon=desktop-entry-editor" \
               "Categories=Utility;" \
-              > "$DESKTOP_FILE"
+              > "$DESKTOP_FILE" # Use valid Utility category
             echo "Created basic $DESKTOP_FILE"
-          else
-            echo "Desktop file already exists: $DESKTOP_FILE"
           fi
 
-          # Make sure there's an icon, copy if needed
+          # Ensure icon exists, copy if needed
           if [ ! -f "$ICON_DEST_FILE" ]; then
              if [ -f "$ICON_SOURCE" ]; then
                echo "Icon not found in AppDir, copying from '$ICON_SOURCE'..."
@@ -124,22 +114,25 @@ jobs:
              echo "Icon already exists: $ICON_DEST_FILE"
           fi
 
-      # Bundle dependencies and create the AppImage using linuxdeploy
+          # Debugging: Print final desktop file content
+          echo "--- Final contents of $DESKTOP_FILE ---"
+          cat "$DESKTOP_FILE"
+          echo "--- End of $DESKTOP_FILE ---"
+
+
+      # Create the AppImage using linuxdeploy
       - name: Create AppImage
         run: |
-          # Set environment variable for linuxdeploy-plugin-gtk
           export DEPLOY_GTK_VERSION=3
-
-          # Run linuxdeploy with the gtk plugin
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --plugin gtk \
             --output appimage \
-            --desktop-file AppDir/usr/share/applications/desktop-entry-editor.desktop # Explicitly point to desktop file
+            --desktop-file "$DESKTOP_FILE" # Use the variable for consistency
 
-      # Upload the generated AppImage as a workflow artifact
+      # Upload the generated AppImage artifact
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-entry-editor-AppImage # Name of the artifact
-          path: ./*-x86_64.AppImage # More specific path matching linuxdeploy output pattern
+          name: desktop-entry-editor-AppImage
+          path: ./*-x86_64.AppImage # Match linuxdeploy output pattern
