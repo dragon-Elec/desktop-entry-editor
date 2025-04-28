@@ -42,13 +42,12 @@ jobs:
             python3-gi-cairo \
             python3-xdg
 
-      # Download linuxdeploy and its GTK plugin
+            # Download linuxdeploy and its GTK plugin
       - name: Download linuxdeploy and plugins
         run: |
           wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/v3/linuxdeploy-plugin-gtk-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk-x86_64.AppImage
-
+          wget https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
       # Prepare build system (run autoreconf) - good practice for Autotools in CI
       # This regenerates the build files based on the installed dependencies
       - name: Prepare build system
