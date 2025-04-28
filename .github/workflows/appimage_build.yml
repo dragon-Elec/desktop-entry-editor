@@ -1,56 +1,125 @@
 name: Build AppImage
 
+# Trigger the workflow on push to the main branch
 on:
   push:
-    branches: [master]
+    branches:
+      - master # Or 'master' if that's your main branch name
 
+# Define a single job named 'build'
 jobs:
   build:
+    name: Build AppImage
+    # Run on the latest Ubuntu Linux runner
     runs-on: ubuntu-latest
+
+    # Steps to execute within the job
     steps:
-      # Checkout the repository
-      - uses: actions/checkout@v4
+      # Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # Install build tools and GTK dependencies
-      - name: Install dependencies
+      # Install build dependencies via apt
+      - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential autoconf automake libtool pkg-config \
-            libgtk-3-dev librsvg2-dev libasound2-dev libgirepository1.0-dev patchelf wget
+          # Update package list
+          sudo apt update
+          # Install essential build tools, libraries, and Python dependencies
+          sudo apt install -y \
+            build-essential \
+            automake \
+            autoconf \
+            intltool \
+            pkg-config \
+            gettext \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libgtksourceview-3.0-dev \
+            python3 \
+            python3-pip \
+            python3-gi \
+            python3-gi-cairo \
+            python3-xdg \
+            fuse   # Required for AppImage execution
 
-      # Build the project with Autotools into AppDir
-      - name: Build with Autotools
+      # Download linuxdeploy and its GTK plugin
+      - name: Download linuxdeploy and plugins
         run: |
-          set -e
-          autoreconf -i
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
+          # Make AppImage executable in CI environment
+          sudo modprobe fuse
+          mkdir -p $HOME/.cache/linuxdeploy
+
+      # Create the m4 directory if it doesn't exist
+      - name: Create m4 directory
+        run: mkdir -p m4
+
+      # Prepare build system (run autoreconf) - good practice for Autotools in CI
+      - name: Prepare build system
+        run: |
+          # Ensure the environment finds the .m4 files installed by dev packages
+          autoreconf --force --install --verbose
+
+      # Run the standard Autotools configuration and build steps
+      - name: Configure and Build
+        run: |
+          # Run autotools sequence - simplified since autoreconf already ran
+          intltoolize --force --copy --automake
+          automake --add-missing --copy
+
+          # Configure the build, install to /usr within the AppDir
           ./configure --prefix=/usr
+
+          # Compile the application
           make
-          mkdir -p AppDir/usr
-          make DESTDIR=$PWD/AppDir install
 
-      # (Optional) Prepare AppDir: copy desktop file and icon if not already installed
-      - name: Prepare AppDir (copy desktop file and icon)
-        if: false
+      # Create the AppDir structure and install the built application into it
+      - name: Create AppDir and install
         run: |
-          # These commands are placeholders; replace with your actual paths if needed.
-          mkdir -p AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/128x128/apps
-          cp your-app.desktop AppDir/usr/share/applications/
-          cp your-app.png AppDir/usr/share/icons/hicolor/128x128/apps/
+          mkdir -p AppDir
+          # Install using the DESTDIR variable to place files in the AppDir
+          make install DESTDIR=$(pwd)/AppDir
 
-      # Download linuxdeploy and GTK plugin, then bundle the AppImage
-      - name: Create AppImage with linuxdeploy
+      # Ensure desktop file and icon are correctly set up
+      - name: Setup AppDir metadata
         run: |
-          set -e
-          wget -q -O linuxdeploy-plugin-gtk.sh \
-            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
-          wget -q -O linuxdeploy-x86_64.AppImage \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy*.AppImage linuxdeploy-plugin-gtk.sh
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin gtk --output appimage
+          # Verify the desktop file exists
+          if [ ! -f "AppDir/usr/share/applications/desktop-entry-editor.desktop" ]; then
+            echo "Desktop file not found! Creating a basic one..."
+            mkdir -p AppDir/usr/share/applications/
+            cat > AppDir/usr/share/applications/desktop-entry-editor.desktop << EOF
+            [Desktop Entry]
+            Type=Application
+            Name=Desktop Entry Editor
+            Exec=desktop-entry-editor
+            Icon=desktop-entry-editor
+            Categories=Utility;
+            EOF
+          fi
+          
+          # Make sure there's an icon (create a symbolic link if necessary)
+          if [ ! -f "AppDir/usr/share/icons/hicolor/scalable/apps/desktop-entry-editor.svg" ] && [ -f "data/icons/desktop-entry-editor.svg" ]; then
+            mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps/
+            cp data/icons/desktop-entry-editor.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          fi
 
-      # Upload the resulting AppImage as a workflow artifact
+      # Bundle dependencies and create the AppImage using linuxdeploy
+      - name: Create AppImage
+        run: |
+          # Set environment variable for linuxdeploy-plugin-gtk
+          export DEPLOY_GTK_VERSION=3
+          
+          # Run linuxdeploy with the gtk plugin
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin gtk \
+            --output appimage
+
+      # Upload the generated AppImage as a workflow artifact
       - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: MyApp.AppImage
-          path: "*.AppImage"
+          name: desktop-entry-editor-AppImage # Name of the artifact
+          path: ./*.AppImage # Path to the generated AppImage file (should be in the root)
