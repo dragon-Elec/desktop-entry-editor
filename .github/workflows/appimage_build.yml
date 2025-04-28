@@ -1,0 +1,106 @@
+# Workflow name
+name: Build AppImage
+
+# Trigger the workflow on push to the main branch
+on:
+  push:
+    branches:
+      - main # Or 'master' if that's your main branch name
+
+# Define a single job named 'build'
+jobs:
+  build:
+    name: Build AppImage
+    # Run on the latest Ubuntu Linux runner
+    runs-on: ubuntu-latest
+
+    # Steps to execute within the job
+    steps:
+      # Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Install build dependencies via apt
+      - name: Install build dependencies
+        run: |
+          # Update package list
+          sudo apt update
+          # Install essential build tools, libraries, and Python dependencies
+          sudo apt install -y \
+            build-essential \
+            automake \
+            autoconf \
+            intltool \
+            pkg-config \
+            gettext \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libgtksourceview-3.0-dev \
+            python3 \
+            python3-pip \
+            python3-gi \
+            python3-gi-cairo \
+            python3-xdg
+
+      # Download linuxdeploy and its GTK plugin
+      - name: Download linuxdeploy and plugins
+        run: |
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk-x86_64.AppImage
+
+      # Prepare build system (run autoreconf) - good practice for Autotools in CI
+      # This regenerates the build files based on the installed dependencies
+      - name: Prepare build system
+        run: |
+          # Ensure the environment finds the .m4 files installed by dev packages
+          # You might need to adjust ACLOCAL_PATH if aclocal fails to find macros,
+          # but usually apt installs them in standard locations aclocal checks.
+          autoreconf --force --install --verbose
+
+      # Run the standard Autotools configuration and build steps
+      - name: Configure and Build
+        run: |
+          # Run autotools sequence
+          aclocal -I m4
+          intltoolize --force --copy --automake
+          autoconf
+          automake --add-missing --copy
+
+          # Configure the build, install to /usr within the AppDir
+          ./configure --prefix=/usr
+
+          # Compile the application
+          make
+
+      # Create the AppDir structure and install the built application into it
+      - name: Create AppDir and install
+        run: |
+          mkdir AppDir
+          # Install using the DESTDIR variable to place files in the AppDir
+          make install DESTDIR=$(pwd)/AppDir
+
+      # Bundle dependencies and create the AppImage using linuxdeploy
+      - name: Create AppImage
+        run: |
+          # Run linuxdeploy with the gtk plugin
+          # --appdir: specify the directory containing the application files
+          # --plugin gtk: use the GTK plugin to automatically bundle GTK/GLib dependencies
+          # --output appimage: specify that we want an AppImage output
+          # --executable: the path to the main executable *relative to the AppDir root*
+          # --desktop-file: the path to the desktop file *relative to the AppDir root*
+          # The desktop file should have the Icon= key which linuxdeploy will use
+          # Note: With --prefix=/usr and DESTDIR, files go into AppDir/usr/...
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin gtk \
+            --output appimage \
+            --executable AppDir/usr/bin/desktop-entry-editor \
+            --desktop-file AppDir/usr/share/applications/desktop-entry-editor.desktop
+
+      # Upload the generated AppImage as a workflow artifact
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-entry-editor-AppImage # Name of the artifact
+          path: ./*.AppImage # Path to the generated AppImage file (should be in the root)
