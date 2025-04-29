@@ -23,6 +23,25 @@ jobs:
             libgirepository1.0-dev \
             wget # For downloading linuxdeploy
 
+      # NEW STEP: Create symlink for pkg-config file name mismatch
+      - name: Create girepository-2.0.pc symlink
+        run: |
+          PKG_CONFIG_DIR="/usr/lib/x86_64-linux-gnu/pkgconfig"
+          echo "Checking for original file: ${PKG_CONFIG_DIR}/girepository-1.0.pc"
+          ls -l "${PKG_CONFIG_DIR}/girepository-1.0.pc"
+          echo "Creating symlink: ${PKG_CONFIG_DIR}/girepository-2.0.pc -> girepository-1.0.pc"
+          # Use sudo as the directory is system-owned
+          sudo ln -s girepository-1.0.pc "${PKG_CONFIG_DIR}/girepository-2.0.pc"
+          echo "Verifying symlink:"
+          ls -l "${PKG_CONFIG_DIR}/girepository-2.0.pc"
+
+      # 2. Set up Python (Ensures consistent environment)
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x' # Use a recent Python 3. Can specify e.g. '3.10'
+
+      # Install Python dependencies (with debugging)
       - name: Install Python dependencies (PyGObject, PyXDG) using pip
         run: |
           echo "--- Debug: Environment Before Changes ---"
@@ -39,13 +58,13 @@ jobs:
           echo "PKG_CONFIG_PATH is now: $PKG_CONFIG_PATH"
           echo "-----------------------------------------"
 
-          echo "--- Debug: Check .pc file location ---"
-          ls -lh /usr/lib/x86_64-linux-gnu/pkgconfig/girepository-2.0.pc
+          echo "--- Debug: Check .pc file location (Now checking the LINK) ---"
+          ls -lh /usr/lib/x86_64-linux-gnu/pkgconfig/girepository-2.0.pc # This should now exist
           ls -lh /usr/share/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Not found in /usr/share"
           ls -lh /usr/lib/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Not found in /usr/lib"
           echo "-----------------------------------------"
 
-          echo "--- Debug: Test pkg-config directly ---"
+          echo "--- Debug: Test pkg-config directly (Should succeed now) ---"
           echo "Attempting: pkg-config --modversion girepository-2.0"
           pkg-config --modversion girepository-2.0
           echo "pkg-config exit code: $?"
@@ -54,7 +73,6 @@ jobs:
           echo "--- Attempting pip install ---"
           python -m pip install --upgrade pip
           pip install PyGObject pyxdg
-    
 
       # 3. Generate ./configure script (Standard for Autotools from git)
       - name: Run autoreconf (generate configure script)
@@ -83,17 +101,16 @@ jobs:
           ls -lR AppDir/usr
           echo "-----------------------------------------"
 
-      # 7. Bundle Python Runtime into AppDir (CRUCIAL STEP)
+      # 7. Bundle Python Runtime into AppDir (CRUCIAL STEP - MAY NEED REFINEMENT LATER)
       - name: Bundle Python 3
         run: |
           echo "Locating Python 3 installation..."
-          PYTHON_EXE=$(which python3)
-          PYTHON_VER_MAJOR_MINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          # Find where Python standard libraries are installed
-          PYTHON_INSTALL_PREFIX=$(python3 -c "import sys; print(sys.prefix)") # e.g., /usr
+          # Use the Python from setup-python for consistency
+          PYTHON_EXE=$(which python) # Corrected: 'which python' after setup-python
+          PYTHON_VER_MAJOR_MINOR=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          PYTHON_INSTALL_PREFIX=$(python -c "import sys; print(sys.prefix)")
           PYTHON_LIB_DIR="${PYTHON_INSTALL_PREFIX}/lib/python${PYTHON_VER_MAJOR_MINOR}"
-          # Find where packages like 'gi' are installed
-          PYTHON_SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])") # e.g., /usr/lib/python3/dist-packages
+          PYTHON_SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
 
           echo "Python Executable: ${PYTHON_EXE}"
           echo "Python Version: ${PYTHON_VER_MAJOR_MINOR}"
@@ -101,33 +118,38 @@ jobs:
           echo "Python Site Packages: ${PYTHON_SITE_PACKAGES}"
 
           echo "Copying Python executable..."
-          # Ensure target directory exists within AppDir
           mkdir -p AppDir/usr/bin
-          cp "$PYTHON_EXE" AppDir/usr/bin/
+          cp "$PYTHON_EXE" AppDir/usr/bin/python${PYTHON_VER_MAJOR_MINOR} # Be specific
+          # Optionally add a generic 'python3' link if needed by AppRun
+          (cd AppDir/usr/bin && ln -s python${PYTHON_VER_MAJOR_MINOR} python3)
 
           echo "Copying essential Python libraries..."
-          # Ensure target directory exists within AppDir (using the detected path structure)
           mkdir -p "AppDir${PYTHON_LIB_DIR}"
-          # Copy core library files. -L follows symlinks. '*' copies contents.
           cp -rL "${PYTHON_LIB_DIR}/"*.py "AppDir${PYTHON_LIB_DIR}/"
-          cp -rL "${PYTHON_LIB_DIR}/"*.so* "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true # Copy shared objects if any
-          # Copy key subdirectories needed by many apps (add more if needed)
+          cp -rL "${PYTHON_LIB_DIR}/"*.so* "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true
           cp -rL "${PYTHON_LIB_DIR}/encodings" "AppDir${PYTHON_LIB_DIR}/"
           cp -rL "${PYTHON_LIB_DIR}/importlib" "AppDir${PYTHON_LIB_DIR}/"
           cp -rL "${PYTHON_LIB_DIR}/collections" "AppDir${PYTHON_LIB_DIR}/"
-          cp -rL "${PYTHON_LIB_DIR}/lib-dynload" "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true # Compiled modules
+          cp -rL "${PYTHON_LIB_DIR}/lib-dynload" "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true
 
 
-          echo "Copying Python site-packages (including gi)..."
-          # Ensure target directory exists within AppDir
+          echo "Copying Python site-packages (including gi, pyxdg)..."
           mkdir -p "AppDir${PYTHON_SITE_PACKAGES}"
-          # Copy the 'gi' module, which is critical for GTK apps
+          # Copy the packages we installed via pip earlier
           if [ -d "${PYTHON_SITE_PACKAGES}/gi" ]; then
             cp -rL "${PYTHON_SITE_PACKAGES}/gi" "AppDir${PYTHON_SITE_PACKAGES}/"
           else
-            echo "Warning: Python 'gi' module not found at ${PYTHON_SITE_PACKAGES}/gi"
+            echo "Error: Python 'gi' module not found at ${PYTHON_SITE_PACKAGES}/gi during bundling!"
+            exit 1
           fi
-          # Optionally copy other specific needed packages if identified later
+          if [ -d "${PYTHON_SITE_PACKAGES}/xdg" ]; then
+            cp -rL "${PYTHON_SITE_PACKAGES}/xdg" "AppDir${PYTHON_SITE_PACKAGES}/"
+          else
+             echo "Error: Python 'xdg' module not found at ${PYTHON_SITE_PACKAGES}/xdg during bundling!"
+             exit 1
+          fi
+          # Also copy pygobject .so files if they exist directly in site-packages
+          cp -rL "${PYTHON_SITE_PACKAGES}/"*.so* "AppDir${PYTHON_SITE_PACKAGES}/" 2>/dev/null || true
 
           echo "Python bundling attempt complete."
 
@@ -140,28 +162,29 @@ jobs:
 
       # 9. Create the AppImage
       - name: Create AppImage
+        # Export variables needed by linuxdeploy and potentially AppRun
         env:
-           # Make AppRun provide python3 when 'env python3' is used
-           PYTHONPATH: "${APPDIR}/usr/lib/python${PYTHON_VER_MAJOR_MINOR}:${APPDIR}${PYTHON_SITE_PACKAGES}"
+           # Make AppRun find the bundled python
+           APPIMAGE_EXTRACT_AND_RUN: 1 # Often needed for Python apps
+           PATH: "${APPDIR}/usr/bin:${PATH}" # Ensure bundled python is found first
+           # Set Python specific paths (relative to AppDir root)
+           PYTHONHOME: "${APPDIR}/usr"
+           PYTHONPATH: "${APPDIR}${PYTHON_LIB_DIR}:${APPDIR}${PYTHON_SITE_PACKAGES}"
+           # GTK Plugin Version
+           DEPLOY_GTK_VERSION: 3
         run: |
-          export DEPLOY_GTK_VERSION=3
           # export LINUXDEPLOY_DEBUG=1 # Uncomment for verbose debugging
 
-          # Define paths based on standard installation locations within AppDir
-          # Note: 'make install' should have created these from the .in files
           DESKTOP_FILE="AppDir/usr/share/applications/desktop-entry-editor.desktop"
           ICON_FILE_SVG="AppDir/usr/share/icons/hicolor/scalable/apps/desktop-entry-editor.svg"
           ICON_FILE_PNG="AppDir/usr/share/icons/hicolor/48x48/apps/desktop-entry-editor.png" # Check size if needed
-          EXECUTABLE_FILE="AppDir/usr/bin/desktop-entry-editor" # The script installed by 'make install'
+          EXECUTABLE_PATH_REL="usr/bin/desktop-entry-editor" # Relative path for linuxdeploy
 
-          # Check files exist (important for debugging)
           echo "Checking for files:"
           ls -l "$DESKTOP_FILE"
-          ls -l "$EXECUTABLE_FILE"
+          ls -l "AppDir/$EXECUTABLE_PATH_REL"
           ls -l "$ICON_FILE_SVG" 2>/dev/null || ls -l "$ICON_FILE_PNG" 2>/dev/null || echo "Icon file not found"
 
-
-          # Select the icon file argument that exists
           ICON_ARG=""
           if [ -f "$ICON_FILE_SVG" ]; then
             ICON_ARG="--icon-file $ICON_FILE_SVG"
@@ -174,14 +197,21 @@ jobs:
           fi
 
           echo "Running linuxdeploy..."
-          # Run linuxdeploy. It will find libs, bundle GTK, create AppRun etc.
+          # Use relative path for executable; linuxdeploy operates from AppDir root
+          # It copies the executable to the top level AppDir automatically
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --plugin gtk \
             --output appimage \
             --desktop-file "$DESKTOP_FILE" \
             $ICON_ARG \
-            --executable "$EXECUTABLE_FILE"
+            --executable "$EXECUTABLE_PATH_REL"
+
+          # Optional: Verify AppRun script points to correct Python
+          echo "--- AppRun Contents ---"
+          cat AppDir/AppRun
+          echo "-----------------------"
+
 
       # 10. Upload the AppImage artifact
       - name: Upload AppImage artifact
