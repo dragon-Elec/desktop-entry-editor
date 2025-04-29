@@ -23,17 +23,24 @@ jobs:
             libgirepository1.0-dev \
             wget # For downloading linuxdeploy
 
-      # NEW STEP: Create symlink for pkg-config file name mismatch
+      # UPDATED STEP: Create symlink assuming .pc file is in /usr/share/pkgconfig
       - name: Create girepository-2.0.pc symlink
         run: |
-          PKG_CONFIG_DIR="/usr/lib/x86_64-linux-gnu/pkgconfig"
-          echo "Checking for original file: ${PKG_CONFIG_DIR}/girepository-1.0.pc"
-          ls -l "${PKG_CONFIG_DIR}/girepository-1.0.pc"
-          echo "Creating symlink: ${PKG_CONFIG_DIR}/girepository-2.0.pc -> girepository-1.0.pc"
+          # Updated: Check in /usr/share/pkgconfig
+          SOURCE_PC_FILE="/usr/share/pkgconfig/girepository-1.0.pc"
+          TARGET_LINK_DIR="/usr/share/pkgconfig" # Link within the same directory
+          TARGET_LINK_NAME="girepository-2.0.pc"
+
+          echo "Checking for original file: ${SOURCE_PC_FILE}"
+          ls -l "${SOURCE_PC_FILE}" # This must succeed now
+
+          echo "Creating symlink: ${TARGET_LINK_DIR}/${TARGET_LINK_NAME} -> girepository-1.0.pc"
           # Use sudo as the directory is system-owned
-          sudo ln -s girepository-1.0.pc "${PKG_CONFIG_DIR}/girepository-2.0.pc"
+          # Use relative source path for ln inside the target directory
+          sudo ln -s $(basename "${SOURCE_PC_FILE}") "${TARGET_LINK_DIR}/${TARGET_LINK_NAME}"
+
           echo "Verifying symlink:"
-          ls -l "${PKG_CONFIG_DIR}/girepository-2.0.pc"
+          ls -l "${TARGET_LINK_DIR}/${TARGET_LINK_NAME}"
 
       # 2. Set up Python (Ensures consistent environment)
       - name: Set up Python 3
@@ -41,7 +48,7 @@ jobs:
         with:
           python-version: '3.x' # Use a recent Python 3. Can specify e.g. '3.10'
 
-      # Install Python dependencies (with debugging)
+      # Install Python dependencies (with debugging, checking link in /usr/share)
       - name: Install Python dependencies (PyGObject, PyXDG) using pip
         run: |
           echo "--- Debug: Environment Before Changes ---"
@@ -52,16 +59,18 @@ jobs:
           # Unset PKG_CONFIG_PATH set by setup-python
           unset PKG_CONFIG_PATH
           # Explicitly set PKG_CONFIG_PATH to include standard system locations
+          # This already includes /usr/share/pkgconfig
           export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
 
           echo "--- Debug: Environment After Changes ---"
           echo "PKG_CONFIG_PATH is now: $PKG_CONFIG_PATH"
           echo "-----------------------------------------"
 
-          echo "--- Debug: Check .pc file location (Now checking the LINK) ---"
-          ls -lh /usr/lib/x86_64-linux-gnu/pkgconfig/girepository-2.0.pc # This should now exist
-          ls -lh /usr/share/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Not found in /usr/share"
-          ls -lh /usr/lib/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Not found in /usr/lib"
+          echo "--- Debug: Check .pc file location (Now checking the LINK in /usr/share) ---"
+          # Updated: Check link location
+          ls -lh /usr/share/pkgconfig/girepository-2.0.pc
+          ls -lh /usr/lib/x86_64-linux-gnu/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Link not expected in /usr/lib/x86_64-linux-gnu"
+          ls -lh /usr/lib/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Link not expected in /usr/lib"
           echo "-----------------------------------------"
 
           echo "--- Debug: Test pkg-config directly (Should succeed now) ---"
@@ -106,7 +115,7 @@ jobs:
         run: |
           echo "Locating Python 3 installation..."
           # Use the Python from setup-python for consistency
-          PYTHON_EXE=$(which python) # Corrected: 'which python' after setup-python
+          PYTHON_EXE=$(which python) # 'which python' after setup-python
           PYTHON_VER_MAJOR_MINOR=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
           PYTHON_INSTALL_PREFIX=$(python -c "import sys; print(sys.prefix)")
           PYTHON_LIB_DIR="${PYTHON_INSTALL_PREFIX}/lib/python${PYTHON_VER_MAJOR_MINOR}"
@@ -120,7 +129,6 @@ jobs:
           echo "Copying Python executable..."
           mkdir -p AppDir/usr/bin
           cp "$PYTHON_EXE" AppDir/usr/bin/python${PYTHON_VER_MAJOR_MINOR} # Be specific
-          # Optionally add a generic 'python3' link if needed by AppRun
           (cd AppDir/usr/bin && ln -s python${PYTHON_VER_MAJOR_MINOR} python3)
 
           echo "Copying essential Python libraries..."
@@ -135,7 +143,6 @@ jobs:
 
           echo "Copying Python site-packages (including gi, pyxdg)..."
           mkdir -p "AppDir${PYTHON_SITE_PACKAGES}"
-          # Copy the packages we installed via pip earlier
           if [ -d "${PYTHON_SITE_PACKAGES}/gi" ]; then
             cp -rL "${PYTHON_SITE_PACKAGES}/gi" "AppDir${PYTHON_SITE_PACKAGES}/"
           else
@@ -148,7 +155,6 @@ jobs:
              echo "Error: Python 'xdg' module not found at ${PYTHON_SITE_PACKAGES}/xdg during bundling!"
              exit 1
           fi
-          # Also copy pygobject .so files if they exist directly in site-packages
           cp -rL "${PYTHON_SITE_PACKAGES}/"*.so* "AppDir${PYTHON_SITE_PACKAGES}/" 2>/dev/null || true
 
           echo "Python bundling attempt complete."
@@ -162,15 +168,11 @@ jobs:
 
       # 9. Create the AppImage
       - name: Create AppImage
-        # Export variables needed by linuxdeploy and potentially AppRun
         env:
-           # Make AppRun find the bundled python
-           APPIMAGE_EXTRACT_AND_RUN: 1 # Often needed for Python apps
-           PATH: "${APPDIR}/usr/bin:${PATH}" # Ensure bundled python is found first
-           # Set Python specific paths (relative to AppDir root)
+           APPIMAGE_EXTRACT_AND_RUN: 1
+           PATH: "${APPDIR}/usr/bin:${PATH}"
            PYTHONHOME: "${APPDIR}/usr"
            PYTHONPATH: "${APPDIR}${PYTHON_LIB_DIR}:${APPDIR}${PYTHON_SITE_PACKAGES}"
-           # GTK Plugin Version
            DEPLOY_GTK_VERSION: 3
         run: |
           # export LINUXDEPLOY_DEBUG=1 # Uncomment for verbose debugging
@@ -197,8 +199,6 @@ jobs:
           fi
 
           echo "Running linuxdeploy..."
-          # Use relative path for executable; linuxdeploy operates from AppDir root
-          # It copies the executable to the top level AppDir automatically
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --plugin gtk \
@@ -207,7 +207,6 @@ jobs:
             $ICON_ARG \
             --executable "$EXECUTABLE_PATH_REL"
 
-          # Optional: Verify AppRun script points to correct Python
           echo "--- AppRun Contents ---"
           cat AppDir/AppRun
           echo "-----------------------"
