@@ -4,7 +4,7 @@ name: Build AppImage
 on:
   workflow_dispatch:
     branches:
-      - master # Make sure this is your main branch name
+      - main # Make sure this is your main branch name
 
 # Define a single job named 'build'
 jobs:
