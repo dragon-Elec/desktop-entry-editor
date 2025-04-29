@@ -33,6 +33,7 @@ jobs:
         run: |
           # Unset PKG_CONFIG_PATH set by setup-python to allow finding system libs
           unset PKG_CONFIG_PATH          # <-- ADD THIS LINE
+                    export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig" # <-- ADD/MODIFY THIS LINE
           python -m pip install --upgrade pip
           # Now pip/meson should be able to find system .pc files via pkg-config
           pip install PyGObject pyxdg
