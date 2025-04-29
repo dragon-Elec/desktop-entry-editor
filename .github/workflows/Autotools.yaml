@@ -31,7 +31,7 @@ jobs:
       - name: Install PyXDG using pip
         run: |
           python -m pip install --upgrade pip
-          pip install pyxdg
+          pip install PyGObject pyxdg
     
 
       # 3. Generate ./configure script (Standard for Autotools from git)
