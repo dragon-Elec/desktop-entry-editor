@@ -28,10 +28,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x' # Use a recent Python 3. Can specify e.g. '3.10'
-      # NEW STEP: Install pyxdg using pip for the setup-python environment
-      - name: Install PyXDG using pip
+      # Install Python dependencies needed by './configure' using pip
+      - name: Install Python dependencies (PyGObject, PyXDG) using pip # <-- Updated Name (optional, but clearer)
         run: |
+          # Unset PKG_CONFIG_PATH set by setup-python to allow finding system libs
+          unset PKG_CONFIG_PATH          # <-- ADD THIS LINE
           python -m pip install --upgrade pip
+          # Now pip/meson should be able to find system .pc files via pkg-config
           pip install PyGObject pyxdg
     
 
