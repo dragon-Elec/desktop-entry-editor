@@ -23,19 +23,36 @@ jobs:
             libgirepository1.0-dev \
             wget # For downloading linuxdeploy
 
-      # 2. Set up Python (Ensures consistent environment)
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x' # Use a recent Python 3. Can specify e.g. '3.10'
-      # Install Python dependencies needed by './configure' using pip
-      - name: Install Python dependencies (PyGObject, PyXDG) using pip # <-- Updated Name (optional, but clearer)
+      - name: Install Python dependencies (PyGObject, PyXDG) using pip
         run: |
-          # Unset PKG_CONFIG_PATH set by setup-python to allow finding system libs
-          unset PKG_CONFIG_PATH          # <-- ADD THIS LINE
-                    export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig" # <-- ADD/MODIFY THIS LINE
+          echo "--- Debug: Environment Before Changes ---"
+          env | grep PKG_CONFIG_PATH || echo "PKG_CONFIG_PATH not initially set"
+          which pkg-config
+          echo "-----------------------------------------"
+
+          # Unset PKG_CONFIG_PATH set by setup-python
+          unset PKG_CONFIG_PATH
+          # Explicitly set PKG_CONFIG_PATH to include standard system locations
+          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
+
+          echo "--- Debug: Environment After Changes ---"
+          echo "PKG_CONFIG_PATH is now: $PKG_CONFIG_PATH"
+          echo "-----------------------------------------"
+
+          echo "--- Debug: Check .pc file location ---"
+          ls -lh /usr/lib/x86_64-linux-gnu/pkgconfig/girepository-2.0.pc
+          ls -lh /usr/share/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Not found in /usr/share"
+          ls -lh /usr/lib/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Not found in /usr/lib"
+          echo "-----------------------------------------"
+
+          echo "--- Debug: Test pkg-config directly ---"
+          echo "Attempting: pkg-config --modversion girepository-2.0"
+          pkg-config --modversion girepository-2.0
+          echo "pkg-config exit code: $?"
+          echo "-----------------------------------------"
+
+          echo "--- Attempting pip install ---"
           python -m pip install --upgrade pip
-          # Now pip/meson should be able to find system .pc files via pkg-config
           pip install PyGObject pyxdg
     
 
