@@ -27,11 +27,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x' # Use a recent Python 3. Can specify e.g. '3.10'
-          # NEW STEP: Install pyxdg using pip for the setup-python environment
-          - name: Install PyXDG using pip
-            run: |
-              python -m pip install --upgrade pip
-              pip install pyxdg
+      # NEW STEP: Install pyxdg using pip for the setup-python environment
+      - name: Install PyXDG using pip
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyxdg
     
           # 3. Generate ./configure script (Standard for Autotools from git)
           - name: Run autoreconf (generate configure script)
