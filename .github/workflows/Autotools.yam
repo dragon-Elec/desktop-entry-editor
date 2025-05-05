@@ -1,220 +1,187 @@
-name: Build AppImage (Autotools)
+# .github/workflows/build-appimage.yml
+
+name: Build AppImage
 
 on:
   push:
-    branches: [ "main" ] # Adjust branch name if needed (e.g., "master")
-  workflow_dispatch: # Allow manual triggering
+    branches: [ "main" ] # Adjust branch name if needed
+  release:
+    types: [published]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest # Use a standard GitHub runner
+    # Use a specific LTS runner for better consistency and compatibility
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repository
+      #----------------------------------------------
+      # Checkout Code
+      #----------------------------------------------
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. Install Build and Runtime Dependencies
-      - name: Install Dependencies
+      #----------------------------------------------
+      # Install Build & Runtime Dependencies (using apt)
+      #----------------------------------------------
+      - name: Install System Dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update -q
+          # Install build tools for Autotools
+          # Install Python, pip, AND pre-built PyGObject/XDG bindings + GTK libs/dev headers
+          # This avoids pip compilation issues and complex pkg-config setups
           sudo apt-get install -y --no-install-recommends \
-            build-essential automake autoconf libtool \
-            python3 python3-pip python3-gi gir1.2-gtk-3.0 libgtk-3-dev \
-            libgirepository1.0-dev \
-            wget # For downloading linuxdeploy
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            intltool \
+            gettext \
+            python3 \
+            python3-pip \
+            python3-gi \
+            python3-gi-cairo \
+            gir1.2-gtk-3.0 \
+            gir1.2-gtksource-3.0 \
+            python3-xdg \
+            libgtk-3-dev \
+            libgtksourceview-3.0-dev \
+            libglib2.0-dev \
+            wget
 
-      # UPDATED STEP: Create symlink assuming .pc file is in /usr/share/pkgconfig
-      - name: Create girepository-2.0.pc symlink
+      #----------------------------------------------
+      # Download AppImage Tools
+      #----------------------------------------------
+      - name: Download linuxdeploy and plugins
         run: |
-          # Updated: Check in /usr/share/pkgconfig
-          SOURCE_PC_FILE="/usr/share/pkgconfig/girepository-1.0.pc"
-          TARGET_LINK_DIR="/usr/share/pkgconfig" # Link within the same directory
-          TARGET_LINK_NAME="girepository-2.0.pc"
+          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -O linuxdeploy
+          # We need BOTH Python and GTK plugins
+          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage" -O linuxdeploy-plugin-python
+          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-x86_64.AppImage" -O linuxdeploy-plugin-gtk
+          chmod +x linuxdeploy linuxdeploy-plugin-python linuxdeploy-plugin-gtk
 
-          echo "Checking for original file: ${SOURCE_PC_FILE}"
-          ls -l "${SOURCE_PC_FILE}" # This must succeed now
-
-          echo "Creating symlink: ${TARGET_LINK_DIR}/${TARGET_LINK_NAME} -> girepository-1.0.pc"
-          # Use sudo as the directory is system-owned
-          # Use relative source path for ln inside the target directory
-          sudo ln -s $(basename "${SOURCE_PC_FILE}") "${TARGET_LINK_DIR}/${TARGET_LINK_NAME}"
-
-          echo "Verifying symlink:"
-          ls -l "${TARGET_LINK_DIR}/${TARGET_LINK_NAME}"
-
-      # 2. Set up Python (Ensures consistent environment)
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x' # Use a recent Python 3. Can specify e.g. '3.10'
-
-      # Install Python dependencies (with debugging, checking link in /usr/share)
-      - name: Install Python dependencies (PyGObject, PyXDG) using pip
+      #----------------------------------------------
+      # Build Desktop Entry Editor (Autotools)
+      #----------------------------------------------
+      - name: Prepare Autotools (autoreconf)
         run: |
-          echo "--- Debug: Environment Before Changes ---"
-          env | grep PKG_CONFIG_PATH || echo "PKG_CONFIG_PATH not initially set"
-          which pkg-config
-          echo "-----------------------------------------"
+          # Regenerate build system files - standard practice when building from git
+          aclocal -I m4
+          intltoolize --force --copy
+          autoconf
+          automake --add-missing --copy --force-missing
 
-          # Unset PKG_CONFIG_PATH set by setup-python
-          unset PKG_CONFIG_PATH
-          # Explicitly set PKG_CONFIG_PATH to include standard system locations
-          # This already includes /usr/share/pkgconfig
-          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
-
-          echo "--- Debug: Environment After Changes ---"
-          echo "PKG_CONFIG_PATH is now: $PKG_CONFIG_PATH"
-          echo "-----------------------------------------"
-
-          echo "--- Debug: Check .pc file location (Now checking the LINK in /usr/share) ---"
-          # Updated: Check link location
-          ls -lh /usr/share/pkgconfig/girepository-2.0.pc
-          ls -lh /usr/lib/x86_64-linux-gnu/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Link not expected in /usr/lib/x86_64-linux-gnu"
-          ls -lh /usr/lib/pkgconfig/girepository-2.0.pc 2>/dev/null || echo "Link not expected in /usr/lib"
-          echo "-----------------------------------------"
-
-          echo "--- Debug: Test pkg-config directly (Should succeed now) ---"
-          echo "Attempting: pkg-config --modversion girepository-2.0"
-          pkg-config --modversion girepository-2.0
-          echo "pkg-config exit code: $?"
-          echo "-----------------------------------------"
-
-          echo "--- Attempting pip install ---"
-          python -m pip install --upgrade pip
-          pip install PyGObject pyxdg
-
-      # 3. Generate ./configure script (Standard for Autotools from git)
-      - name: Run autoreconf (generate configure script)
-        run: autoreconf -fiv
-
-      # 4. Configure the build
       - name: Configure Build
         run: |
-          # Use /usr prefix which is standard for AppDir structures.
-          # Autotools should detect python3 automatically now.
+          # Install into /usr within the AppDir for standard paths
+          # Autotools should find the system python3 installed via apt
           ./configure --prefix=/usr
 
-      # 5. Build the application
       - name: Make Build
         run: make
 
-      # 6. Prepare AppDir and Install Application using 'make install'
-      - name: Prepare AppDir and Install
+      #----------------------------------------------
+      # Prepare AppDir (Stage Installation)
+      #----------------------------------------------
+      - name: Create AppDir and Install
         run: |
-          mkdir AppDir # Create the root for installation
-          # Install files into AppDir, respecting the /usr prefix from configure
-          # $PWD ensures DESTDIR is an absolute path
-          make install DESTDIR="$PWD/AppDir"
-          # Verify installation (optional but useful debug step)
-          echo "--- AppDir contents after make install ---"
-          ls -lR AppDir/usr
-          echo "-----------------------------------------"
+          # Use make install with DESTDIR to stage the installation
+          make install DESTDIR=AppDir
 
-      # 7. Bundle Python Runtime into AppDir (CRUCIAL STEP - MAY NEED REFINEMENT LATER)
-      - name: Bundle Python 3
-        run: |
-          echo "Locating Python 3 installation..."
-          # Use the Python from setup-python for consistency
-          PYTHON_EXE=$(which python) # 'which python' after setup-python
-          PYTHON_VER_MAJOR_MINOR=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          PYTHON_INSTALL_PREFIX=$(python -c "import sys; print(sys.prefix)")
-          PYTHON_LIB_DIR="${PYTHON_INSTALL_PREFIX}/lib/python${PYTHON_VER_MAJOR_MINOR}"
-          PYTHON_SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
-
-          echo "Python Executable: ${PYTHON_EXE}"
-          echo "Python Version: ${PYTHON_VER_MAJOR_MINOR}"
-          echo "Python Lib Dir: ${PYTHON_LIB_DIR}"
-          echo "Python Site Packages: ${PYTHON_SITE_PACKAGES}"
-
-          echo "Copying Python executable..."
-          mkdir -p AppDir/usr/bin
-          cp "$PYTHON_EXE" AppDir/usr/bin/python${PYTHON_VER_MAJOR_MINOR} # Be specific
-          (cd AppDir/usr/bin && ln -s python${PYTHON_VER_MAJOR_MINOR} python3)
-
-          echo "Copying essential Python libraries..."
-          mkdir -p "AppDir${PYTHON_LIB_DIR}"
-          cp -rL "${PYTHON_LIB_DIR}/"*.py "AppDir${PYTHON_LIB_DIR}/"
-          cp -rL "${PYTHON_LIB_DIR}/"*.so* "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true
-          cp -rL "${PYTHON_LIB_DIR}/encodings" "AppDir${PYTHON_LIB_DIR}/"
-          cp -rL "${PYTHON_LIB_DIR}/importlib" "AppDir${PYTHON_LIB_DIR}/"
-          cp -rL "${PYTHON_LIB_DIR}/collections" "AppDir${PYTHON_LIB_DIR}/"
-          cp -rL "${PYTHON_LIB_DIR}/lib-dynload" "AppDir${PYTHON_LIB_DIR}/" 2>/dev/null || true
-
-
-          echo "Copying Python site-packages (including gi, pyxdg)..."
-          mkdir -p "AppDir${PYTHON_SITE_PACKAGES}"
-          if [ -d "${PYTHON_SITE_PACKAGES}/gi" ]; then
-            cp -rL "${PYTHON_SITE_PACKAGES}/gi" "AppDir${PYTHON_SITE_PACKAGES}/"
-          else
-            echo "Error: Python 'gi' module not found at ${PYTHON_SITE_PACKAGES}/gi during bundling!"
-            exit 1
-          fi
-          if [ -d "${PYTHON_SITE_PACKAGES}/xdg" ]; then
-            cp -rL "${PYTHON_SITE_PACKAGES}/xdg" "AppDir${PYTHON_SITE_PACKAGES}/"
-          else
-             echo "Error: Python 'xdg' module not found at ${PYTHON_SITE_PACKAGES}/xdg during bundling!"
-             exit 1
-          fi
-          cp -rL "${PYTHON_SITE_PACKAGES}/"*.so* "AppDir${PYTHON_SITE_PACKAGES}/" 2>/dev/null || true
-
-          echo "Python bundling attempt complete."
-
-      # 8. Download linuxdeploy tools
-      - name: Download linuxdeploy tools
-        run: |
-          wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-x86_64.AppImage
-          chmod +x linuxdeploy*.AppImage
-
-      # 9. Create the AppImage
-      - name: Create AppImage
+      #----------------------------------------------
+      # Bundle Dependencies into AppDir
+      #----------------------------------------------
+      - name: Bundle Python Environment using Plugin
         env:
-           APPIMAGE_EXTRACT_AND_RUN: 1
-           PATH: "${APPDIR}/usr/bin:${PATH}"
-           PYTHONHOME: "${APPDIR}/usr"
-           PYTHONPATH: "${APPDIR}${PYTHON_LIB_DIR}:${APPDIR}${PYTHON_SITE_PACKAGES}"
-           DEPLOY_GTK_VERSION: 3
+          APPDIR: ${{ github.workspace }}/AppDir
         run: |
-          # export LINUXDEPLOY_DEBUG=1 # Uncomment for verbose debugging
+          # This plugin automatically finds the system Python3, copies it,
+          # finds required modules (dee, xdg, gi), and bundles them correctly.
+          echo "Running linuxdeploy-plugin-python..."
+          ./linuxdeploy-plugin-python --appdir $APPDIR
 
-          DESKTOP_FILE="AppDir/usr/share/applications/desktop-entry-editor.desktop"
-          ICON_FILE_SVG="AppDir/usr/share/icons/hicolor/scalable/apps/desktop-entry-editor.svg"
-          ICON_FILE_PNG="AppDir/usr/share/icons/hicolor/48x48/apps/desktop-entry-editor.png" # Check size if needed
-          EXECUTABLE_PATH_REL="usr/bin/desktop-entry-editor" # Relative path for linuxdeploy
-
-          echo "Checking for files:"
-          ls -l "$DESKTOP_FILE"
-          ls -l "AppDir/$EXECUTABLE_PATH_REL"
-          ls -l "$ICON_FILE_SVG" 2>/dev/null || ls -l "$ICON_FILE_PNG" 2>/dev/null || echo "Icon file not found"
-
-          ICON_ARG=""
-          if [ -f "$ICON_FILE_SVG" ]; then
-            ICON_ARG="--icon-file $ICON_FILE_SVG"
-            echo "Using SVG icon."
-          elif [ -f "$ICON_FILE_PNG" ]; then
-             ICON_ARG="--icon-file $ICON_FILE_PNG"
-             echo "Warning: SVG icon not found, using PNG icon."
+      - name: Compile GSettings Schema
+        run: |
+          # Compile schemas within the AppDir structure
+          SCHEMA_DIR="AppDir/usr/share/glib-2.0/schemas"
+          if [ -d "$SCHEMA_DIR" ]; then
+             echo "Compiling GSettings schemas in $SCHEMA_DIR..."
+             glib-compile-schemas "$SCHEMA_DIR/"
           else
-             echo "Warning: No icon file found for AppImage embedding."
+             echo "Warning: GSettings schema directory not found at $SCHEMA_DIR. Skipping compilation."
           fi
 
+      #----------------------------------------------
+      # Create Final AppImage using linuxdeploy
+      #----------------------------------------------
+      - name: Determine AppImage Version
+        id: version
+        run: |
+          # Use release tag name if triggered by release, otherwise use short commit hash
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "APP_VERSION=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "APP_VERSION=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          fi
+          echo "AppImage Version set to: ${{ steps.version.outputs.APP_VERSION }}"
+
+      - name: Run linuxdeploy (Bundle libs & Create AppImage)
+        env:
+          APPDIR: ${{ github.workspace }}/AppDir
+          VERSION: ${{ steps.version.outputs.APP_VERSION }} # Pass version to linuxdeploy
+          # DEPLOY_GTK_VERSION=3 # GTK plugin usually detects this, but can be explicit
+        run: |
           echo "Running linuxdeploy..."
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
+          # Use relative paths from AppDir root for linuxdeploy arguments
+          ./linuxdeploy --appdir $APPDIR \
+            --executable usr/bin/desktop-entry-editor \
+            --desktop-file usr/share/applications/desktop-entry-editor.desktop \
+            --icon-file usr/share/icons/hicolor/scalable/apps/desktop-entry-editor.svg \
             --plugin gtk \
-            --output appimage \
-            --desktop-file "$DESKTOP_FILE" \
-            $ICON_ARG \
-            --executable "$EXECUTABLE_PATH_REL"
+            --output appimage # Create the final AppImage file
 
-          echo "--- AppRun Contents ---"
-          cat AppDir/AppRun
-          echo "-----------------------"
+      #----------------------------------------------
+      # Upload Artifacts
+      #----------------------------------------------
+      - name: Prepare Artifact Name and Verify Creation
+        id: artifact_info
+        run: |
+          ARTIFACT_FILENAME="Desktop-Entry-Editor-${{ steps.version.outputs.APP_VERSION }}-x86_64.AppImage"
+          echo "Expected artifact filename: $ARTIFACT_FILENAME"
 
+          # Use find to locate the generated AppImage (linuxdeploy might slightly alter name)
+          # Look in the current directory (where linuxdeploy outputs)
+          GENERATED_APPIMAGE=$(find . -maxdepth 1 -name 'Desktop*.AppImage' -print -quit)
 
-      # 10. Upload the AppImage artifact
-      - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v4
+          if [[ -z "$GENERATED_APPIMAGE" ]]; then
+            echo "::error::AppImage file not found after linuxdeploy run!"
+            ls -lA . # List current directory contents for debugging
+            exit 1
+          else
+            echo "Found generated AppImage: $GENERATED_APPIMAGE"
+            # Rename to the consistent name for upload
+            mv "$GENERATED_APPIMAGE" "$ARTIFACT_FILENAME"
+            echo "Renamed to: $ARTIFACT_FILENAME"
+            echo "FILENAME=$ARTIFACT_FILENAME" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload AppImage as Build Artifact
+        uses: actions/upload-artifact@v4 # Use v4 for latest features/fixes
         with:
           name: Desktop-Entry-Editor-AppImage
-          path: Desktop_Entry_Editor*.AppImage # Use wildcard matching for generated name
+          path: ${{ steps.artifact_info.outputs.FILENAME }} # Use the output path
+
+      #----------------------------------------------
+      # Upload to Release (Conditional)
+      #----------------------------------------------
+      - name: Upload AppImage to Release
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./${{ steps.artifact_info.outputs.FILENAME }} # Use the output path
+          asset_name: ${{ steps.artifact_info.outputs.FILENAME }}
+          asset_content_type: application/vnd.appimage
