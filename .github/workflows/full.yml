@@ -2,120 +2,102 @@
 
 name: Build AppImage
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push events but only for the main branch
   push:
-    branches: [ "main" ] # Or your default branch (e.g., master)
-
-  # Triggers the workflow when a release is published
+    branches: [ "main" ]
   release:
     types: [published]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
   build:
-    # Use a supported LTS Ubuntu version
     runs-on: ubuntu-22.04
 
     steps:
-      #----------------------------------------------
-      # Checkout Code
-      #----------------------------------------------
+      # --- Checkout Code ---
       - name: Checkout code
         uses: actions/checkout@v4
 
-      #----------------------------------------------
-      # Set up Build Environment (WITH libfuse2)
-      #----------------------------------------------
+      # --- Install Dependencies ---
       - name: Install Dependencies (including libfuse2)
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
-            git \
-            build-essential \
-            autoconf \
-            automake \
-            libtool \
-            pkg-config \
-            intltool \
-            gettext \
-            python3 \
-            python3-pip \
-            python3-gi \
-            python3-gi-cairo \
-            gir1.2-gtk-3.0 \
-            gir1.2-gtksource-3.0 \
-            python3-xdg \
-            libgtk-3-dev \
-            libgtksourceview-3.0-dev \
-            libglib2.0-dev \
-            wget \
-            libfuse2 # FUSE dependency for running AppImages
+            git build-essential autoconf automake libtool pkg-config \
+            intltool gettext python3 python3-pip python3-gi \
+            python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gtksource-3.0 \
+            python3-xdg libgtk-3-dev libgtksourceview-3.0-dev \
+            libglib2.0-dev wget libfuse2
 
-      #----------------------------------------------
-      # Download Core AppImage Tools (Corrected Python Plugin URL)
-      #----------------------------------------------
+      # --- Download Core AppImage Tools ---
       - name: Install Core AppImage Tools (linuxdeploy + python plugin)
         run: |
-          # Download main linuxdeploy tool
           wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -O linuxdeploy
-          # Download Python plugin from the correct 'niess' repo
           wget -c -nv "https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage" -O linuxdeploy-plugin-python
           chmod +x linuxdeploy linuxdeploy-plugin-python
 
-      #----------------------------------------------
-      # Build Desktop Entry Editor
-      #----------------------------------------------
+      # --- Build Desktop Entry Editor ---
       - name: Prepare Autotools
         run: |
           aclocal -I m4
           intltoolize --force --copy
           autoconf
           automake --add-missing --copy --force-missing
-
       - name: Configure Build
         run: |
           ./configure --prefix=/usr
-
       - name: Make Build
         run: |
           make
 
-      #----------------------------------------------
-      # Prepare AppDir
-      #----------------------------------------------
+      # --- Prepare AppDir ---
       - name: Create AppDir and Install
         run: |
+          # Ensure AppDir exists
+          mkdir -p AppDir
+          # Run make install
           make install DESTDIR=AppDir
 
-      #----------------------------------------------
-      # Bundle Dependencies (Python & GSettings)
-      #----------------------------------------------
+      # --- VERIFY INSTALLATION --- # <-- NEW STEP
+      - name: Verify Installation Paths
+        run: |
+          echo "--- Verifying AppDir structure after 'make install' ---"
+          find AppDir -ls # List all installed files with details
+
+          echo "--- Specifically checking for executable ---"
+          ls -l AppDir/usr/bin/desktop-entry-editor || echo "::warning::Executable NOT FOUND at AppDir/usr/bin/desktop-entry-editor"
+
+          echo "--- Specifically checking for GSettings schema ---"
+          ls -l AppDir/usr/share/glib-2.0/schemas/apps.desktop-entry-editor.gschema.xml || echo "::warning::GSettings schema NOT FOUND at AppDir/usr/share/glib-2.0/schemas/"
+
+          # If the executable isn't in /usr/bin, maybe it's somewhere else?
+          # e.g., sometimes scripts go into /usr/libexec or just /usr/lib
+          if ! [ -f AppDir/usr/bin/desktop-entry-editor ]; then
+              echo "::error::Executable not found in standard location. Searching AppDir..."
+              find AppDir -name 'desktop-entry-editor' -type f -exec ls -l {} \;
+              exit 1 # Fail the build if the primary executable isn't where expected
+          fi
+
+      # --- Bundle Dependencies ---
       - name: Bundle Python Environment
         env:
           APPDIR: ${{ github.workspace }}/AppDir
         run: |
-          # Run the Python plugin AFTER core tools are downloaded
           ./linuxdeploy-plugin-python --appdir $APPDIR
 
       - name: Compile GSettings Schema
         run: |
           SCHEMA_DIR="AppDir/usr/share/glib-2.0/schemas"
-          if [ -d "$SCHEMA_DIR" ]; then
+          # Check if the specific schema file exists before compiling
+          if [ -f "$SCHEMA_DIR/apps.desktop-entry-editor.gschema.xml" ]; then
              echo "Compiling GSettings schemas in $SCHEMA_DIR..."
              glib-compile-schemas "$SCHEMA_DIR/"
           else
-             # This warning appeared before, let's check install step
-             echo "Warning: GSettings schema directory not found at $SCHEMA_DIR. Checking installation..."
-             ls -lR AppDir/usr/share/glib-2.0 || echo "AppDir/usr/share/glib-2.0 not found"
+             # Use warning annotation for visibility in GitHub Actions UI
+             echo "::warning::GSettings schema file NOT FOUND at $SCHEMA_DIR/apps.desktop-entry-editor.gschema.xml. Skipping compilation."
           fi
 
-      #----------------------------------------------
-      # Create AppImage (Download GTK Plugin Script)
-      #----------------------------------------------
+      # --- Create AppImage ---
       - name: Determine AppImage Version
         id: version
         run: |
@@ -126,18 +108,19 @@ jobs:
           fi
           echo "AppImage Version set to: ${{ steps.version.outputs.APP_VERSION }}"
 
-      - name: Bundle Libraries and Create AppImage (using GTK script plugin) # <-- Step Updated
+      - name: Bundle Libraries and Create AppImage (using GTK script plugin)
         env:
           APPDIR: ${{ github.workspace }}/AppDir
           VERSION: ${{ steps.version.outputs.APP_VERSION }}
         run: |
           # Download the GTK Plugin SCRIPT
           echo "Downloading linuxdeploy-plugin-gtk script..."
-          wget -c -nv "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh" -O linuxdeploy-plugin-gtk # <-- CORRECT URL for script
-          chmod +x linuxdeploy-plugin-gtk # Make the script executable
+          wget -c -nv "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh" -O linuxdeploy-plugin-gtk
+          chmod +x linuxdeploy-plugin-gtk
 
           # Now run linuxdeploy - it will find and execute the script plugin
           echo "Running linuxdeploy with plugins..."
+          # Ensure relative paths are used for files inside AppDir
           ./linuxdeploy --appdir $APPDIR \
             --executable usr/bin/desktop-entry-editor \
             --desktop-file usr/share/applications/desktop-entry-editor.desktop \
@@ -145,9 +128,7 @@ jobs:
             --plugin gtk \
             --output appimage
 
-      #----------------------------------------------
-      # Upload Artifacts
-      #----------------------------------------------
+      # --- Upload Artifacts ---
       - name: Prepare Artifact Name
         id: artifact_info
         run: |
@@ -168,9 +149,7 @@ jobs:
           name: Desktop-Entry-Editor-AppImage
           path: ${{ steps.artifact_info.outputs.FILENAME }}
 
-      #----------------------------------------------
-      # Upload to Release (Only if triggered by release)
-      #----------------------------------------------
+      # --- Upload to Release ---
       - name: Upload AppImage to Release
         if: github.event_name == 'release'
         uses: actions/upload-release-asset@v1
