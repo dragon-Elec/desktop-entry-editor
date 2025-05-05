@@ -30,7 +30,7 @@ jobs:
       #----------------------------------------------
       # Set up Build Environment (WITH libfuse2)
       #----------------------------------------------
-      - name: Install Dependencies (including libfuse2) # <-- Step Updated
+      - name: Install Dependencies (including libfuse2)
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
@@ -53,15 +53,16 @@ jobs:
             libgtksourceview-3.0-dev \
             libglib2.0-dev \
             wget \
-            libfuse2 # <-- ADDED FUSE dependency
+            libfuse2 # FUSE dependency for running AppImages
 
       #----------------------------------------------
-      # Download AppImage Tools (Verify this step is EXACTLY like this)
+      # Download Core AppImage Tools (Corrected Python Plugin URL)
       #----------------------------------------------
-      - name: Install AppImage Tools (linuxdeploy + python plugin) # <-- Verify This Step
+      - name: Install Core AppImage Tools (linuxdeploy + python plugin)
         run: |
-          # Make sure these three lines are present and correct
+          # Download main linuxdeploy tool
           wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -O linuxdeploy
+          # Download Python plugin from the correct 'niess' repo
           wget -c -nv "https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage" -O linuxdeploy-plugin-python
           chmod +x linuxdeploy linuxdeploy-plugin-python
 
@@ -91,12 +92,13 @@ jobs:
           make install DESTDIR=AppDir
 
       #----------------------------------------------
-      # Bundle Dependencies
+      # Bundle Dependencies (Python & GSettings)
       #----------------------------------------------
       - name: Bundle Python Environment
         env:
           APPDIR: ${{ github.workspace }}/AppDir
         run: |
+          # Run the Python plugin AFTER core tools are downloaded
           ./linuxdeploy-plugin-python --appdir $APPDIR
 
       - name: Compile GSettings Schema
@@ -106,11 +108,13 @@ jobs:
              echo "Compiling GSettings schemas in $SCHEMA_DIR..."
              glib-compile-schemas "$SCHEMA_DIR/"
           else
-             echo "Warning: GSettings schema directory not found at $SCHEMA_DIR. Skipping compilation."
+             # This warning appeared before, let's check install step
+             echo "Warning: GSettings schema directory not found at $SCHEMA_DIR. Checking installation..."
+             ls -lR AppDir/usr/share/glib-2.0 || echo "AppDir/usr/share/glib-2.0 not found"
           fi
 
       #----------------------------------------------
-      # Create AppImage
+      # Create AppImage (Download GTK Plugin Script)
       #----------------------------------------------
       - name: Determine AppImage Version
         id: version
@@ -122,16 +126,18 @@ jobs:
           fi
           echo "AppImage Version set to: ${{ steps.version.outputs.APP_VERSION }}"
 
-      - name: Bundle Libraries and Create AppImage
+      - name: Bundle Libraries and Create AppImage (using GTK script plugin) # <-- Step Updated
         env:
           APPDIR: ${{ github.workspace }}/AppDir
           VERSION: ${{ steps.version.outputs.APP_VERSION }}
         run: |
-          # Need to explicitly add the GTK plugin here too!
-          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-x86_64.AppImage" -O linuxdeploy-plugin-gtk
-          chmod +x linuxdeploy-plugin-gtk
+          # Download the GTK Plugin SCRIPT
+          echo "Downloading linuxdeploy-plugin-gtk script..."
+          wget -c -nv "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh" -O linuxdeploy-plugin-gtk # <-- CORRECT URL for script
+          chmod +x linuxdeploy-plugin-gtk # Make the script executable
 
-          # Now run linuxdeploy including the GTK plugin
+          # Now run linuxdeploy - it will find and execute the script plugin
+          echo "Running linuxdeploy with plugins..."
           ./linuxdeploy --appdir $APPDIR \
             --executable usr/bin/desktop-entry-editor \
             --desktop-file usr/share/applications/desktop-entry-editor.desktop \
