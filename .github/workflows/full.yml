@@ -17,8 +17,8 @@ on:
 
 jobs:
   build:
-    # Use an older LTS Ubuntu for better compatibility
-    runs-on: ubuntu-22.04
+    # Use a supported LTS Ubuntu version
+    runs-on: ubuntu-22.04 # <-- Updated runner version
 
     steps:
       #----------------------------------------------
@@ -33,6 +33,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update -q
+          # Package names are generally the same between 20.04 and 22.04 for these deps
           sudo apt-get install -y --no-install-recommends \
             git \
             build-essential \
@@ -138,7 +139,7 @@ jobs:
           # Find the actual generated file (linuxdeploy adds version automatically if VERSION env var is set)
           GENERATED_APPIMAGE=$(find . -maxdepth 1 -name 'Desktop_Entry_Editor*.AppImage' -print -quit)
           if [[ -z "$GENERATED_APPIMAGE" ]]; then
-            echo "Error: Could not find generated AppImage file!"
+            echo "::error::Could not find generated AppImage file!"
             exit 1
           fi
           echo "GENERATED_FILE=$GENERATED_APPIMAGE" >> $GITHUB_OUTPUT
@@ -147,10 +148,10 @@ jobs:
 
 
       - name: Upload AppImage as Build Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v3 # Using v3 explicitly
         with:
           name: Desktop-Entry-Editor-AppImage
-          path: ${{ steps.artifact_name.outputs.FILENAME }}
+          path: ${{ steps.artifact_name.outputs.FILENAME }} # Correct path to the renamed file
 
       #----------------------------------------------
       # Upload to Release (Only if triggered by release)
@@ -162,6 +163,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./${{ steps.artifact_name.outputs.FILENAME }}
+          asset_path: ./${{ steps.artifact_name.outputs.FILENAME }} # Correct path to the renamed file
           asset_name: ${{ steps.artifact_name.outputs.FILENAME }}
           asset_content_type: application/vnd.appimage
