@@ -55,7 +55,7 @@ jobs:
       - name: Install AppImage Tools (linuxdeploy + python plugin)
         run: |
           wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -O linuxdeploy
-          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage" -O linuxdeploy-plugin-python
+          wget -c -nv "https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage" -O linuxdeploy-plugin-python # <-- CORRECT URL
           chmod +x linuxdeploy linuxdeploy-plugin-python
       #----------------------------------------------
       # Build Desktop Entry Editor
