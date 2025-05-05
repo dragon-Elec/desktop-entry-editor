@@ -28,9 +28,9 @@ jobs:
         uses: actions/checkout@v4
 
       #----------------------------------------------
-      # Set up Build Environment
+      # Set up Build Environment (WITH libfuse2)
       #----------------------------------------------
-      - name: Install Dependencies
+      - name: Install Dependencies (including libfuse2) # <-- Step Updated
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
@@ -45,19 +45,26 @@ jobs:
             python3 \
             python3-pip \
             python3-gi \
+            python3-gi-cairo \
             gir1.2-gtk-3.0 \
             gir1.2-gtksource-3.0 \
             python3-xdg \
             libgtk-3-dev \
             libgtksourceview-3.0-dev \
             libglib2.0-dev \
-            libfuse2
-            wget
-      - name: Install AppImage Tools (linuxdeploy + python plugin)
+            wget \
+            libfuse2 # <-- ADDED FUSE dependency
+
+      #----------------------------------------------
+      # Download AppImage Tools (Verify this step is EXACTLY like this)
+      #----------------------------------------------
+      - name: Install AppImage Tools (linuxdeploy + python plugin) # <-- Verify This Step
         run: |
+          # Make sure these three lines are present and correct
           wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -O linuxdeploy
-          wget -c -nv "https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage" -O linuxdeploy-plugin-python # <-- CORRECT URL
+          wget -c -nv "https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage" -O linuxdeploy-plugin-python
           chmod +x linuxdeploy linuxdeploy-plugin-python
+
       #----------------------------------------------
       # Build Desktop Entry Editor
       #----------------------------------------------
@@ -67,18 +74,22 @@ jobs:
           intltoolize --force --copy
           autoconf
           automake --add-missing --copy --force-missing
+
       - name: Configure Build
         run: |
           ./configure --prefix=/usr
+
       - name: Make Build
         run: |
           make
+
       #----------------------------------------------
       # Prepare AppDir
       #----------------------------------------------
       - name: Create AppDir and Install
         run: |
           make install DESTDIR=AppDir
+
       #----------------------------------------------
       # Bundle Dependencies
       #----------------------------------------------
@@ -87,6 +98,7 @@ jobs:
           APPDIR: ${{ github.workspace }}/AppDir
         run: |
           ./linuxdeploy-plugin-python --appdir $APPDIR
+
       - name: Compile GSettings Schema
         run: |
           SCHEMA_DIR="AppDir/usr/share/glib-2.0/schemas"
@@ -96,6 +108,7 @@ jobs:
           else
              echo "Warning: GSettings schema directory not found at $SCHEMA_DIR. Skipping compilation."
           fi
+
       #----------------------------------------------
       # Create AppImage
       #----------------------------------------------
@@ -107,37 +120,47 @@ jobs:
           else
             echo "APP_VERSION=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           fi
+          echo "AppImage Version set to: ${{ steps.version.outputs.APP_VERSION }}"
+
       - name: Bundle Libraries and Create AppImage
         env:
           APPDIR: ${{ github.workspace }}/AppDir
           VERSION: ${{ steps.version.outputs.APP_VERSION }}
         run: |
+          # Need to explicitly add the GTK plugin here too!
+          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-x86_64.AppImage" -O linuxdeploy-plugin-gtk
+          chmod +x linuxdeploy-plugin-gtk
+
+          # Now run linuxdeploy including the GTK plugin
           ./linuxdeploy --appdir $APPDIR \
-            --executable $APPDIR/usr/bin/desktop-entry-editor \
-            --desktop-file $APPDIR/usr/share/applications/desktop-entry-editor.desktop \
-            --icon-file $APPDIR/usr/share/icons/hicolor/scalable/apps/desktop-entry-editor.svg \
+            --executable usr/bin/desktop-entry-editor \
+            --desktop-file usr/share/applications/desktop-entry-editor.desktop \
+            --icon-file usr/share/icons/hicolor/scalable/apps/desktop-entry-editor.svg \
+            --plugin gtk \
             --output appimage
+
       #----------------------------------------------
       # Upload Artifacts
       #----------------------------------------------
       - name: Prepare Artifact Name
-        id: artifact_name
+        id: artifact_info
         run: |
           ARTIFACT_FILENAME="Desktop-Entry-Editor-${{ steps.version.outputs.APP_VERSION }}-x86_64.AppImage"
           echo "FILENAME=$ARTIFACT_FILENAME" >> $GITHUB_OUTPUT
-          GENERATED_APPIMAGE=$(find . -maxdepth 1 -name 'Desktop_Entry_Editor*.AppImage' -print -quit)
+          GENERATED_APPIMAGE=$(find . -maxdepth 1 -name 'Desktop*.AppImage' -print -quit)
           if [[ -z "$GENERATED_APPIMAGE" ]]; then
             echo "::error::Could not find generated AppImage file!"
             exit 1
           fi
-          echo "GENERATED_FILE=$GENERATED_APPIMAGE" >> $GITHUB_OUTPUT
+          echo "Found generated AppImage: $GENERATED_APPIMAGE"
           mv "$GENERATED_APPIMAGE" "$ARTIFACT_FILENAME"
+          echo "Renamed to: $ARTIFACT_FILENAME"
 
       - name: Upload AppImage as Build Artifact
-        uses: actions/upload-artifact@v4 # <--- CHANGED FROM v3 to v4
+        uses: actions/upload-artifact@v4
         with:
           name: Desktop-Entry-Editor-AppImage
-          path: ${{ steps.artifact_name.outputs.FILENAME }}
+          path: ${{ steps.artifact_info.outputs.FILENAME }}
 
       #----------------------------------------------
       # Upload to Release (Only if triggered by release)
@@ -149,6 +172,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./${{ steps.artifact_name.outputs.FILENAME }}
-          asset_name: ${{ steps.artifact_name.outputs.FILENAME }}
+          asset_path: ./${{ steps.artifact_info.outputs.FILENAME }}
+          asset_name: ${{ steps.artifact_info.outputs.FILENAME }}
           asset_content_type: application/vnd.appimage
